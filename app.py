@@ -35,7 +35,6 @@ if menu_file is not None:
             month_val = int(match.group(2))
             year_month_title = f"{year_val}年{month_val}月"
         else:
-            # カレンダーファイルからの取得フォールバック
             if cal_file is not None:
                 df_cal_check = pd.read_excel(cal_file, sheet_name=0)
                 cal_info = str(df_cal_check.iloc[1, 0])
@@ -45,7 +44,7 @@ if menu_file is not None:
                     month_val = int(c_match.group(2))
                     year_month_title = f"{year_val}年{month_val}月"
 
-        title_text = f"野菜トマト・トマト唐麺出数表 {year_month_title}" if year_month_title else "野菜トマト・トマト唐麺出数表"
+        title_text = f"野菜トマト・トマト唐麺出数表 {year_month_title}".strip() if year_month_title else "野菜トマト・トマト唐麺出数表"
         
         header_days = [int(x) for x in df_menu.iloc[3, 6:].values]
         header_weekdays = [str(x).strip() for x in df_menu.iloc[4, 6:].values]
@@ -108,7 +107,6 @@ if menu_file is not None:
             day_num = header_days[idx]
             wd = header_weekdays[idx]
             
-            # 月度の判定 (21日以降は当月、20日以下は翌月)
             if day_num >= 21:
                 m = month_val
             else:
@@ -212,7 +210,7 @@ if menu_file is not None:
                 
         res_df = pd.DataFrame(rows_with_weekly)
         
-        # --- 6. 表示・フォーマット ---
+        # --- 6. 画面表示 ---
         st.markdown(f"## 📋 {title_text}")
         
         format_dict = {}
@@ -231,10 +229,15 @@ if menu_file is not None:
             use_container_width=True
         )
         
-        # --- 7. Excelダウンロード機能 ---
+        # --- 7. 1行目にタイトルを挿入したExcelダウンロード機能 ---
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            res_df.to_excel(writer, sheet_name='出数表', index=False)
+            # データフレームを2行目(startrow=1)から出力
+            res_df.to_excel(writer, sheet_name='出数表', index=False, startrow=1)
+            ws = writer.sheets['出数表']
+            # 1行目A1セルにタイトルを書き込み
+            ws.cell(row=1, column=1, value=title_text)
+            
         processed_data = output.getvalue()
         
         st.download_button(
@@ -243,7 +246,7 @@ if menu_file is not None:
             file_name=f"{title_text}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-        st.success("集計が正常に完了しました！")
+        st.success("1行目にタイトル行を含めたExcel出力の準備が完了しました！")
 
     except Exception as e:
         st.error(f"ファイル解析中にエラーが発生しました: {e}")
