@@ -6,18 +6,20 @@ import re
 # ページ基本設定
 st.set_page_config(page_title="トマトらーめん出数＆構成比集計システム", layout="wide")
 
-st.title("🍅 トマトらーめん グループ別出数・客数構成比集計アプリ")
-st.write("「日別メニュー出数.xlsx」および「カレンダー売上一覧.xlsx」をアップロードしてください。")
+st.title("🍅 トマトらーめん グループ別出数・構成比・チーズ総量集計アプリ")
+st.write("必要なファイル（1.限定麺、2.カレンダー、3.トッピング）をアップロードしてください。")
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
-    menu_file = st.file_uploader("1. 日別メニュー出数 (.xlsx)", type=["xlsx"], key="menu")
+    menu_file = st.file_uploader("1. 日別メニュー出数 (限定麺)", type=["xlsx"], key="menu")
 with col2:
-    cal_file = st.file_uploader("2. カレンダー売上一覧 (.xlsx)", type=["xlsx"], key="cal")
+    cal_file = st.file_uploader("2. カレンダー売上一覧", type=["xlsx"], key="cal")
+with col3:
+    top_file = st.file_uploader("3. 日別メニュー出数 (トッピング)", type=["xlsx"], key="top")
 
 if menu_file is not None:
     try:
-        # --- 1. メニュー出数ファイルの解析 ---
+        # --- 1. 限定麺メニュー出数ファイルの解析 ---
         excel_data = pd.ExcelFile(menu_file)
         sheet_name = excel_data.sheet_names[0]
         df_menu = pd.read_excel(menu_file, sheet_name=sheet_name)
@@ -34,14 +36,13 @@ if menu_file is not None:
         group3_names = ['トマト唐麺', '☆トマト唐麺']
         group4_names = ['スパイシートマト', '小・スパイシートマト', '☆スパイシートマト', '☆小・スパイシトマト']
         
-        def get_group_sum(group_names):
-            sub_df = menu_rows[menu_rows['商品名'].isin(group_names)]
+        def get_group_sum(sub_df):
             return sub_df[day_cols].fillna(0).astype(int).sum(axis=0)
         
-        g1_sum = get_group_sum(group1_names)
-        g2_sum = get_group_sum(group2_names)
-        g3_sum = get_group_sum(group3_names)
-        g4_sum = get_group_sum(group4_names)
+        g1_sum = get_group_sum(menu_rows[menu_rows['商品名'].isin(group1_names)])
+        g2_sum = get_group_sum(menu_rows[menu_rows['商品名'].isin(group2_names)])
+        g3_sum = get_group_sum(menu_rows[menu_rows['商品名'].isin(group3_names)])
+        g4_sum = get_group_sum(menu_rows[menu_rows['商品名'].isin(group4_names)])
         
         # --- 2. カレンダーファイルの解析（客数の自動抽出） ---
         date_customer_map = {}
@@ -63,12 +64,28 @@ if menu_file is not None:
                                 if cust_match:
                                     date_customer_map[day_str] = int(cust_match.group(1))
 
-        # --- 3. 日別データの構築 ---
+        # --- 3. トッピングファイルの解析（チーズ増の自動抽出） ---
+        cheese_add_map = {str(d).zfill(2): 0 for d in header_days}
+        if top_file is not None:
+            df_top = pd.read_excel(top_file, sheet_name=0)
+            top_rows = df_top.iloc[5:31].copy()
+            top_days = list(df_top.iloc[3, 6:].values)
+            top_rows.columns = ['商品CD', '商品名', '消費税率', '売上金額', '販売数量', '平均販売数'] + top_days
+            
+            cheese_names = ['☆とろけるチーズ', '◇とろけるチーズ', 'とろけるチーズ']
+            cheese_sub = top_rows[top_rows['商品名'].isin(cheese_names)]
+            c_sum = cheese_sub[top_days].fillna(0).astype(int).sum(axis=0)
+            
+            for d, val in zip(top_days, c_sum.values):
+                cheese_add_map[str(d).zfill(2)] = int(val)
+
+        # --- 4. 日別データの構築 ---
         day_labels = [f"{str(day).zfill(2)}({wd})" for day, wd in zip(header_days, header_weekdays)]
         customers = [date_customer_map.get(str(day).zfill(2), 0) for day in header_days]
         
         daily_records = []
         for idx in range(len(header_days)):
+            d_str = str(header_days[idx]).zfill(2)
             lbl = day_labels[idx]
             wd = str(header_weekdays[idx]).strip()
             cust = customers[idx]
@@ -77,9 +94,12 @@ if menu_file is not None:
             v4 = g4_sum.values[idx]
             v3 = g3_sum.values[idx]
             v2 = g2_sum.values[idx]
+            c_add = cheese_add_map.get(d_str, 0)
             
-            # 出数が全て0の日（販売開始前等）は除外オプション用に判定できるようにしておく
-            is_zero_day = (v1 + v4 + v3 + v2) == 0
+            # チーズ総量 = 夜チーズ * 3 + チーズ増
+            c_total = (v2 * 3) + c_add
+            
+            is_zero_day = (v1 + v4 + v3 + v2 + c_add) == 0
             
             daily_records.append({
                 '日付(曜日)': lbl,
@@ -89,66 +109,86 @@ if menu_file is not None:
                 'スパイシートマト 出数': v4,
                 'トマト唐麺 出数': v3,
                 '夜チーズ 出数': v2,
+                'チーズ増 出数': c_add,
+                'チーズ総量': c_total,
                 'is_zero_day': is_zero_day
             })
             
-        # --- 4. 週計行を含むテーブルの組み立て ---
+        # --- 5. 週計行を含むテーブルの組み立て ---
         rows_with_weekly = []
         current_week = []
         
         for rec in daily_records:
-            # ゼロの日を自動非表示にする設定の準備
             current_week.append(rec)
             
-            # 日曜日（またはデータ最終日）で週計を計算・挿入
             if rec['曜日'] in ['日', 'Sun'] or rec == daily_records[-1]:
-                # 有効な日（出数が0でない日）がある場合のみ処理
                 non_zero_days = [r for r in current_week if not r['is_zero_day']]
                 
                 if non_zero_days:
                     for r in current_week:
                         if not r['is_zero_day']:
                             c = r['客数']
-                            rows_with_weekly.append({
-                                '日付(曜日)': r['日付(曜日)'],
-                                '客数': c,
-                                '野菜トマト 出数': r['野菜トマト 出数'],
-                                '野菜トマト 構成比': r['野菜トマト 出数'] / c if c > 0 else 0.0,
-                                'スパイシートマト 出数': r['スパイシートマト 出数'],
-                                'スパイシートマト 構成比': r['スパイシートマト 出数'] / c if c > 0 else 0.0,
-                                'トマト唐麺 出数': r['トマト唐麺 出数'],
-                                'トマト唐麺 構成比': r['トマト唐麺 出数'] / c if c > 0 else 0.0,
-                                '夜チーズ 出数': r['夜チーズ 出数'],
-                                'is_summary': False
-                            })
+                            row_dict = {'日付(曜日)': r['日付(曜日)']}
+                            if cal_file is not None:
+                                row_dict['客数'] = c
+                            
+                            row_dict['野菜トマト 出数'] = r['野菜トマト 出数']
+                            if cal_file is not None:
+                                row_dict['野菜トマト 構成比'] = r['野菜トマト 出数'] / c if c > 0 else 0.0
+                                
+                            row_dict['スパイシートマト 出数'] = r['スパイシートマト 出数']
+                            if cal_file is not None:
+                                row_dict['スパイシートマト 構成比'] = r['スパイシートマト 出数'] / c if c > 0 else 0.0
+                                
+                            row_dict['トマト唐麺 出数'] = r['トマト唐麺 出数']
+                            if cal_file is not None:
+                                row_dict['トマト唐麺 構成比'] = r['トマト唐麺 出数'] / c if c > 0 else 0.0
+                                
+                            row_dict['夜チーズ 出数'] = r['夜チーズ 出数']
+                            if top_file is not None:
+                                row_dict['チーズ増 出数'] = r['チーズ増 出数']
+                                row_dict['チーズ総量(食)'] = r['チーズ総量']
+                                
+                            rows_with_weekly.append(row_dict)
                     
-                    # 週計行の追加
+                    # 週計行の計算
                     w_cust = sum(r['客数'] for r in current_week if not r['is_zero_day'])
                     w_v1 = sum(r['野菜トマト 出数'] for r in current_week if not r['is_zero_day'])
                     w_v4 = sum(r['スパイシートマト 出数'] for r in current_week if not r['is_zero_day'])
                     w_v3 = sum(r['トマト唐麺 出数'] for r in current_week if not r['is_zero_day'])
                     w_v2 = sum(r['夜チーズ 出数'] for r in current_week if not r['is_zero_day'])
+                    w_cadd = sum(r['チーズ増 出数'] for r in current_week if not r['is_zero_day'])
+                    w_ctotal = sum(r['チーズ総量'] for r in current_week if not r['is_zero_day'])
                     
-                    rows_with_weekly.append({
-                        '日付(曜日)': '★ 週計',
-                        '客数': w_cust,
-                        '野菜トマト 出数': w_v1,
-                        '野菜トマト 構成比': w_v1 / w_cust if w_cust > 0 else 0.0,
-                        'スパイシートマト 出数': w_v4,
-                        'スパイシートマト 構成比': w_v4 / w_cust if w_cust > 0 else 0.0,
-                        'トマト唐麺 出数': w_v3,
-                        'トマト唐麺 構成比': w_v3 / w_cust if w_cust > 0 else 0.0,
-                        '夜チーズ 出数': w_v2,
-                        'is_summary': True
-                    })
+                    w_row = {'日付(曜日)': '★ 週計'}
+                    if cal_file is not None:
+                        w_row['客数'] = w_cust
+                        
+                    w_row['野菜トマト 出数'] = w_v1
+                    if cal_file is not None:
+                        w_row['野菜トマト 構成比'] = w_v1 / w_cust if w_cust > 0 else 0.0
+                        
+                    w_row['スパイシートマト 出数'] = w_v4
+                    if cal_file is not None:
+                        w_row['スパイシートマト 構成比'] = w_v4 / w_cust if w_cust > 0 else 0.0
+                        
+                    w_row['トマト唐麺 出数'] = w_v3
+                    if cal_file is not None:
+                        w_row['トマト唐麺 構成比'] = w_v3 / w_cust if w_cust > 0 else 0.0
+                        
+                    w_row['夜チーズ 出数'] = w_v2
+                    if top_file is not None:
+                        w_row['チーズ増 出数'] = w_cadd
+                        w_row['チーズ総量(食)'] = w_ctotal
+                        
+                    rows_with_weekly.append(w_row)
                 
                 current_week = []
                 
         res_df = pd.DataFrame(rows_with_weekly)
-        display_df = res_df.drop(columns=['is_summary'])
         
-        # --- 5. 表示・フォーマット ---
-        st.subheader("📊 集計結果（日別 ＆ 週計対客数構成比）")
+        # --- 6. 表示・フォーマット ---
+        st.subheader("📊 集計結果（出数・構成比・チーズ総量）")
         
         format_dict = {}
         if cal_file is not None:
@@ -156,30 +196,29 @@ if menu_file is not None:
             format_dict['スパイシートマト 構成比'] = "{:.2%}"
             format_dict['トマト唐麺 構成比'] = "{:.2%}"
             
-        # 強調表示用スタイリング関数（週計行を背景強調）
         def highlight_weekly(row):
             if row['日付(曜日)'] == '★ 週計':
-                return ['background-color: #f0f2f6; font-weight: bold'] * len(row)
+                return ['background-color: #e6f0fa; font-weight: bold'] * len(row)
             return [''] * len(row)
             
         st.dataframe(
-            display_df.style.format(format_dict).apply(highlight_weekly, axis=1),
+            res_df.style.format(format_dict).apply(highlight_weekly, axis=1),
             use_container_width=True
         )
         
-        # --- 6. Excelダウンロード機能 ---
+        # --- 7. Excelダウンロード機能 ---
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            display_df.to_excel(writer, sheet_name='週計付き出数表', index=False)
+            res_df.to_excel(writer, sheet_name='出数・チーズ総量集計表', index=False)
         processed_data = output.getvalue()
         
         st.download_button(
-            label="📥 週計入り集計表をExcelでダウンロード",
+            label="📥 集計結果（出数・チーズ総量表）をExcelでダウンロード",
             data=processed_data,
-            file_name="トマト出数_週計付き集計表.xlsx",
+            file_name="トマト出数_チーズ総量集計表.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-        st.success("週計を含む集計が完了しました！")
+        st.success("チーズ増およびチーズ総量を含む集計が完了しました！")
 
     except Exception as e:
         st.error(f"ファイル解析中にエラーが発生しました: {e}")
