@@ -232,4 +232,21 @@ if menu_file is not None:
         # --- 7. 1行目タイトル、2行目空行、3行目ヘッダーのExcelダウンロード機能 ---
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # データフレームを3行目(startrow=2)から出力して2行目を空白
+            # データフレームを3行目(startrow=2)から出力して2行目を空白行にする
+            res_df.to_excel(writer, sheet_name='出数表', index=False, startrow=2)
+            ws = writer.sheets['出数表']
+            # 1行目A1セルにタイトルを書き込み
+            ws.cell(row=1, column=1, value=title_text)
+            
+        processed_data = output.getvalue()
+        
+        st.download_button(
+            label=f"📥 {title_text} をExcelでダウンロード",
+            data=processed_data,
+            file_name=f"{title_text}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        st.success("タイトルと表の間に空行を挟んだExcel出力の準備が完了しました！")
+
+    except Exception as e:
+        st.error(f"ファイル解析中にエラーが発生しました: {e}")
