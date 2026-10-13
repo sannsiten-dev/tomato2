@@ -24,11 +24,34 @@ if menu_file is not None:
         sheet_name = excel_data.sheet_names[0]
         df_menu = pd.read_excel(menu_file, sheet_name=sheet_name)
         
-        header_days = df_menu.iloc[3, 6:].values
-        header_weekdays = df_menu.iloc[4, 6:].values
+        # 営業年月の解析（例: "営業年月：2026年09月" -> year=2026, month=9）
+        info_str = str(df_menu.iloc[1, 1])
+        year_val, month_val = 2026, 9
+        year_month_title = ""
+        
+        match = re.search(r'営業年月：(\d{4})年(\d{2})月', info_str)
+        if match:
+            year_val = int(match.group(1))
+            month_val = int(match.group(2))
+            year_month_title = f"{year_val}年{month_val}月"
+        else:
+            # カレンダーファイルからの取得フォールバック
+            if cal_file is not None:
+                df_cal_check = pd.read_excel(cal_file, sheet_name=0)
+                cal_info = str(df_cal_check.iloc[1, 0])
+                c_match = re.search(r'(\d{4})年(\d{2})月', cal_info)
+                if c_match:
+                    year_val = int(c_match.group(1))
+                    month_val = int(c_match.group(2))
+                    year_month_title = f"{year_val}年{month_val}月"
+
+        title_text = f"野菜トマト・トマト唐麺出数表 {year_month_title}" if year_month_title else "野菜トマト・トマト唐麺出数表"
+        
+        header_days = [int(x) for x in df_menu.iloc[3, 6:].values]
+        header_weekdays = [str(x).strip() for x in df_menu.iloc[4, 6:].values]
         
         menu_rows = df_menu.iloc[5:30].copy()
-        day_cols = list(header_days)
+        day_cols = list(df_menu.iloc[3, 6:].values)
         menu_rows.columns = ['商品CD', '商品名', '消費税率', '売上金額', '販売数量', '平均販売数'] + day_cols
         
         group1_names = ['野菜トマトらーめん', '小・トマトらーめん', '☆野菜トマトらーめん', '☆小・トマトらーめん']
@@ -58,18 +81,18 @@ if menu_file is not None:
                     if pd.notna(day_val):
                         day_match = re.search(r'(\d{1,2})', str(day_val))
                         if day_match:
-                            day_str = day_match.group(1).zfill(2)
+                            day_num = int(day_match.group(1))
                             if pd.notna(cust_val):
                                 cust_match = re.search(r'/\s*(\d+)\s*人', str(cust_val))
                                 if cust_match:
-                                    date_customer_map[day_str] = int(cust_match.group(1))
+                                    date_customer_map[day_num] = int(cust_match.group(1))
 
         # --- 3. トッピングファイルの解析（チーズ増の自動抽出） ---
-        cheese_add_map = {str(d).zfill(2): 0 for d in header_days}
+        cheese_add_map = {d: 0 for d in header_days}
         if top_file is not None:
             df_top = pd.read_excel(top_file, sheet_name=0)
             top_rows = df_top.iloc[5:31].copy()
-            top_days = list(df_top.iloc[3, 6:].values)
+            top_days = [int(x) for x in df_top.iloc[3, 6:].values]
             top_rows.columns = ['商品CD', '商品名', '消費税率', '売上金額', '販売数量', '平均販売数'] + top_days
             
             cheese_names = ['☆とろけるチーズ', '◇とろけるチーズ', 'とろけるチーズ']
@@ -77,32 +100,34 @@ if menu_file is not None:
             c_sum = cheese_sub[top_days].fillna(0).astype(int).sum(axis=0)
             
             for d, val in zip(top_days, c_sum.values):
-                cheese_add_map[str(d).zfill(2)] = int(val)
+                cheese_add_map[d] = int(val)
 
-        # --- 4. 日別データの構築 ---
-        day_labels = [f"{str(day).zfill(2)}({wd})" for day, wd in zip(header_days, header_weekdays)]
-        customers = [date_customer_map.get(str(day).zfill(2), 0) for day in header_days]
-        
+        # --- 4. 日付（月/日(曜日)）の自動構築 ---
         daily_records = []
         for idx in range(len(header_days)):
-            d_str = str(header_days[idx]).zfill(2)
-            lbl = day_labels[idx]
-            wd = str(header_weekdays[idx]).strip()
-            cust = customers[idx]
+            day_num = header_days[idx]
+            wd = header_weekdays[idx]
+            
+            # 月度の判定 (21日以降は当月、20日以下は翌月)
+            if day_num >= 21:
+                m = month_val
+            else:
+                m = month_val + 1 if month_val < 12 else 1
+                
+            date_lbl = f"{m}/{day_num}({wd})"
+            cust = date_customer_map.get(day_num, 0)
             
             v1 = g1_sum.values[idx]
             v4 = g4_sum.values[idx]
             v3 = g3_sum.values[idx]
             v2 = g2_sum.values[idx]
-            c_add = cheese_add_map.get(d_str, 0)
-            
-            # チーズ総量 = 夜チーズ * 3 + チーズ増
+            c_add = cheese_add_map.get(day_num, 0)
             c_total = (v2 * 3) + c_add
             
             is_zero_day = (v1 + v4 + v3 + v2 + c_add) == 0
             
             daily_records.append({
-                '日付(曜日)': lbl,
+                '日付(曜日)': date_lbl,
                 '曜日': wd,
                 '客数': cust,
                 '野菜トマト 出数': v1,
@@ -151,7 +176,7 @@ if menu_file is not None:
                                 
                             rows_with_weekly.append(row_dict)
                     
-                    # 週計行の計算
+                    # 週計行
                     w_cust = sum(r['客数'] for r in current_week if not r['is_zero_day'])
                     w_v1 = sum(r['野菜トマト 出数'] for r in current_week if not r['is_zero_day'])
                     w_v4 = sum(r['スパイシートマト 出数'] for r in current_week if not r['is_zero_day'])
@@ -188,7 +213,7 @@ if menu_file is not None:
         res_df = pd.DataFrame(rows_with_weekly)
         
         # --- 6. 表示・フォーマット ---
-        st.subheader("📊 集計結果（出数・構成比・チーズ総量）")
+        st.markdown(f"## 📋 {title_text}")
         
         format_dict = {}
         if cal_file is not None:
@@ -209,16 +234,16 @@ if menu_file is not None:
         # --- 7. Excelダウンロード機能 ---
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            res_df.to_excel(writer, sheet_name='出数・チーズ総量集計表', index=False)
+            res_df.to_excel(writer, sheet_name='出数表', index=False)
         processed_data = output.getvalue()
         
         st.download_button(
-            label="📥 集計結果（出数・チーズ総量表）をExcelでダウンロード",
+            label=f"📥 {title_text} をExcelでダウンロード",
             data=processed_data,
-            file_name="トマト出数_チーズ総量集計表.xlsx",
+            file_name=f"{title_text}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-        st.success("チーズ増およびチーズ総量を含む集計が完了しました！")
+        st.success("集計が正常に完了しました！")
 
     except Exception as e:
         st.error(f"ファイル解析中にエラーが発生しました: {e}")
